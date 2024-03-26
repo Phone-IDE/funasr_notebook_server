@@ -8,6 +8,7 @@ import argparse
 import numpy as np
 import soundfile as sf
 import moviepy.editor as mpy
+from funasr import AutoModel
 from moviepy.editor import *
 from moviepy.video.tools.subtitles import SubtitlesClip
 from subtitle_utils import generate_srt, generate_srt_clip
@@ -277,6 +278,18 @@ def get_parser():
     return parser
 
 
+funasr_model = AutoModel(model="iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+                         model_revision="v2.0.4",
+                         vad_model="damo/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+                         vad_model_revision="v2.0.4",
+                         punc_model="damo/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
+                         punc_model_revision="v2.0.4",
+                         spk_model="damo/speech_campplus_sv_zh-cn_16k-common",
+                         spk_model_revision="v2.0.2",
+                         )
+audio_clipper = VideoClipper(funasr_model)
+
+
 def runner(stage, file, sd_switch, output_dir, dest_text, dest_spk, start_ost, end_ost, output_file, config=None):
     audio_suffixs = ['wav']
     video_suffixs = ['mp4']
@@ -294,71 +307,14 @@ def runner(stage, file, sd_switch, output_dir, dest_text, dest_spk, start_ost, e
         from funasr import AutoModel
         # initialize funasr automodel
         logging.warning("Initializing modelscope asr pipeline.")
-        funasr_model = AutoModel(model="iic/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
-                  model_revision="v2.0.4",
-                  vad_model="damo/speech_fsmn_vad_zh-cn-16k-common-pytorch",
-                  vad_model_revision="v2.0.4",
-                  punc_model="damo/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
-                  punc_model_revision="v2.0.4",
-                  spk_model="damo/speech_campplus_sv_zh-cn_16k-common",
-                  spk_model_revision="v2.0.2",
-                  )
-        audio_clipper = VideoClipper(funasr_model)
+
         if mode == 'audio':
             logging.warning("Recognizing audio file: {}".format(file))
             wav, sr = librosa.load(file, sr=16000)
             res_text, res_srt, state = audio_clipper.recog((sr, wav), sd_switch)
+            return res_srt
         if mode == 'video':
             logging.warning("Recognizing video file: {}".format(file))
             res_text, res_srt, state = audio_clipper.video_recog(file, sd_switch)
-        total_srt_file = output_dir + '/total.srt'
-        with open(total_srt_file, 'w') as fout:
-            fout.write(res_srt)
-            logging.warning("Write total subtitle to {}".format(total_srt_file))
-        write_state(output_dir, state)
-        logging.warning("Recognition successed. You can copy the text segment from below and use stage 2.")
-        print(res_text)
-    if stage == 2:
-        audio_clipper = VideoClipper(None)
-        if mode == 'audio':
-            state = load_state(output_dir)
-            wav, sr = librosa.load(file, sr=16000)
-            state['audio_input'] = (sr, wav)
-            (sr, audio), message, srt_clip = audio_clipper.clip(dest_text, start_ost, end_ost, state, dest_spk=dest_spk)
-            if output_file is None:
-                output_file = output_dir + '/result.wav'
-            clip_srt_file = output_file[:-3] + 'srt'
-            logging.warning(message)
-            sf.write(output_file, audio, 16000)
-            assert output_file.endswith('.wav'), "output_file must ends with '.wav'"
-            logging.warning("Save clipped wav file to {}".format(output_file))
-            with open(clip_srt_file, 'w') as fout:
-                fout.write(srt_clip)
-                logging.warning("Write clipped subtitle to {}".format(clip_srt_file))
-        if mode == 'video':
-            state = load_state(output_dir)
-            state['vedio_filename'] = file
-            if output_file is None:
-                state['clip_video_file'] = file[:-4] + '_clip.mp4'
-            else:
-                state['clip_video_file'] = output_file
-            clip_srt_file = state['clip_video_file'][:-3] + 'srt'
-            state['video'] = mpy.VideoFileClip(file)
-            clip_video_file, message, srt_clip = audio_clipper.video_clip(dest_text, start_ost, end_ost, state, dest_spk=dest_spk)
-            logging.warning("Clipping Log: {}".format(message))
-            logging.warning("Save clipped mp4 file to {}".format(clip_video_file))
-            with open(clip_srt_file, 'w') as fout:
-                fout.write(srt_clip)
-                logging.warning("Write clipped subtitle to {}".format(clip_srt_file))
+            return res_srt
 
-
-def main(cmd=None):
-    print(get_commandline_args(), file=sys.stderr)
-    parser = get_parser()
-    args = parser.parse_args(cmd)
-    kwargs = vars(args)
-    runner(**kwargs)
-
-
-if __name__ == '__main__':
-    main()
